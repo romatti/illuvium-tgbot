@@ -1,3 +1,8 @@
+body{
+    background-color: #11062a;
+    color: white;
+}
+
 table {
 font-family: "Lucida Sans Unicode", "Lucida Grande", Sans-Serif;
 font-size: 14px;
@@ -5,9 +10,8 @@ border-collapse: collapse;
 text-align: center;
 }
 th, td:first-child {
-background: #AFCDE7;
+background: #1c1841;
 color: white;
-padding: 10px 20px;
 }
 th, td {
 border-style: solid;
@@ -15,7 +19,8 @@ border-width: 0 1px 1px 0;
 border-color: white;
 }
 td {
-background: #D8E6F3;
+background: #1c084a;
+color: white;
 }
 th:first-child, td:first-child {
 text-align: left;
