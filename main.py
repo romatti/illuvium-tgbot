@@ -1,41 +1,116 @@
 import const
 import config
-import http.client
+import requests
 import asyncio
 import logging
 import sys
+import datetime
+import json
 
-from aiogram import Bot, Dispatcher, html
+from aiogram import Bot, Dispatcher, html, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, WebAppInfo
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+import aiosqlite
 
 TOKEN = config.TOKEN
 dp = Dispatcher()
 
 
+# Билдер клавиатуры
+def webapp_builder():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="View collections", web_app=WebAppInfo(url="https://romatti.github.io/illuvium-tgbot/"))
+    return builder.as_markup()
+
+
+# Добавить пользователя в базу при нажатии старт
+async def add_to_database(telegram_id, username, wallet=""):
+    async with aiosqlite.connect('illuvium-tgbot.db') as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS users "
+                         "(telegram_id BIGINT, username TEXT, date TEXT, wallet TEXT, number_of_requests BIGINT)")
+        cursor = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        data = await cursor.fetchone()
+        print(data)
+        if data is None:
+            # создаем в первый раз
+            date = f'{datetime.date.today()}'
+            await db.execute("INSERT INTO users (telegram_id, username, date, wallet, number_of_requests) "
+                             "VALUES (?,?,?,?,?) ",
+                             (telegram_id, username, date, wallet, 0))
+            await db.commit()
+        else:
+            if wallet != "":
+                await db.execute("UPDATE users SET wallet = ? WHERE telegram_id = ?",
+                                 (wallet, telegram_id))
+                await db.commit()
+
+
+def collection_parsing(address):
+    collection = []  # Список для хранения всех данных
+    url = f"https://api.immutable.com/v1/assets?user={address}&collection=0x205634b541080afff3bbfe02dcc89f8fa8a1f1d4"
+    headers = {'Accept': "application/json"}
+    params = {'cursor': ''}
+    while True:
+        response = requests.get(url, params=params, headers=headers)
+        if response.status_code != 200:
+            print(f"Ошибка: {response.status_code}")
+            break
+        json_response = response.json()  # <class 'dict'>
+        collection.extend(json_response.get('result', []))
+        if json_response.get('remaining', 0) == 0:
+            break
+        cursor = json_response.get('cursor')
+        if not cursor:
+            print("Курсор не найден.")
+            break
+        params.update({'cursor': cursor})
+
+    return collection
+
+
+def collection_processing(collection):
+    illuvium_collection = {}
+    print(len(collection))
+    for element in collection:
+        if element['collection']['name'] == 'Illuvium Illuvials':
+            name = element['name'] + ' ' + element['metadata']['Finish']
+            if illuvium_collection.get(name) is None:
+                illuvium_collection[name] = 1
+            else:
+                illuvium_collection[name] = illuvium_collection[name] + 1
+    print(illuvium_collection)
+    return illuvium_collection
+
+
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    """
-    This handler receives messages with `/start` command
-    """
-    await message.answer(f"Hello, {html.bold(message.from_user.full_name)}!")
+    await message.answer(f"Hello, {html.bold(message.from_user.full_name)}! To view statistics, enter your IMX wallet Address..")
+    await add_to_database(message.from_user.id, message.from_user.username)
+
+
+@dp.message(F.text.lower().startswith == '0x' and F.text.len() == 42)
+async def add_wallet(message: Message) -> None:
+    try:
+        await add_to_database(message.from_user.id, message.from_user.username, message.text)
+        await message.answer("Success! Please wait while the collection is loading (~ 30 sec)..")
+        collection = collection_parsing(message.text)
+        if len(collection) > 0:
+            illuvium_collection = collection_processing(collection)
+            await message.answer(str(len(illuvium_collection)))
+            await message.answer("Success! To view collections press the button below!", reply_markup=webapp_builder())
+        else:
+            await message.answer("Collection is empty")
+    except TypeError:
+        await message.answer("Error!")
 
 
 @dp.message()
 async def echo_handler(message: Message) -> None:
-    """
-    Handler will forward receive a message back to the sender
-
-    By default, message handler will handle all message types (like a text, photo, sticker etc.)
-    """
-    try:
-        # Send a copy of the received message
-        await message.send_copy(chat_id=message.chat.id)
-    except TypeError:
-        # But not all the types is supported to be copied so need to handle it
-        await message.answer("Nice try!")
+    await message.answer("To view statistics, enter your IMX wallet Address (0x..)..")
 
 
 async def main() -> None:
@@ -44,15 +119,6 @@ async def main() -> None:
 
     # And the run events dispatching
     await dp.start_polling(bot)
-
-    # conn = http.client.HTTPSConnection("api.immutable.com")
-    # headers = {'Accept': "application/json"}
-    # conn.request("GET",
-    #              "/v1/assets?user=0x3bb7a999016cb246e2aa0925838a39451e3759d2&collection=0x205634b541080afff3bbfe02dcc89f8fa8a1f1d4",
-    #              headers=headers)
-    # res = conn.getresponse()
-    # data = res.read()
-    # print(data.decode("utf-8"))
 
 
 if __name__ == "__main__":
